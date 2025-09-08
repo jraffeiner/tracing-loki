@@ -246,7 +246,12 @@ struct SerializedEvent<'a> {
     extra_fields: &'a HashMap<String, String>,
     #[serde(flatten)]
     span_fields: serde_json::Map<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span_name: Option<&'a str>,
     _spans: &'a [&'a str],
+    _span_ids: &'a [u64],
     _target: &'a str,
     _module_path: Option<&'a str>,
     _file: Option<&'a str>,
@@ -312,12 +317,19 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
         let normalized_meta = event.normalized_metadata();
         let meta = normalized_meta.as_ref().unwrap_or_else(|| event.metadata());
         let mut span_fields: serde_json::Map<String, serde_json::Value> = Default::default();
-        let spans = event
+        let id = event
             .parent()
             .cloned()
-            .or_else(|| ctx.current_span().id().cloned())
+            .or_else(|| ctx.current_span().id().cloned());
+        let span_id = id.as_ref().map(Id::into_u64);
+        let span_name = id
+            .as_ref()
+            .and_then(|id| ctx.span(id))
+            .map(|span| span.name());
+        let (spans, span_ids): (Vec<_>, Vec<_>) = id
+            .as_ref()
             .and_then(|id| {
-                ctx.span_scope(&id).map(|scope| {
+                ctx.span_scope(id).map(|scope| {
                     scope.from_root().fold(Vec::new(), |mut spans, span| {
                         span_fields.extend(
                             span.extensions()
@@ -327,12 +339,14 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                                 .iter()
                                 .map(|(f, v)| (f.clone(), v.clone())),
                         );
-                        spans.push(span.name());
+                        spans.push((span.name(), span.id().into_u64()));
                         spans
                     })
                 })
             })
-            .unwrap_or(Vec::new());
+            .unwrap_or(Vec::new())
+            .into_iter()
+            .unzip();
         // TODO: Anything useful to do when the capacity has been reached?
         let _ = self.sender.try_send(Some(LokiEvent {
             trigger_send: !meta.target().starts_with("tracing_loki"),
@@ -342,7 +356,10 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                 event: SerializeEventFieldMapStrippingLog(event),
                 extra_fields: &self.extra_fields,
                 span_fields,
+                span_id,
+                span_name,
                 _spans: &spans,
+                _span_ids: &span_ids,
                 _target: meta.target(),
                 _module_path: meta.module_path(),
                 _file: meta.file(),
