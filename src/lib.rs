@@ -247,7 +247,7 @@ struct SerializedEvent<'a> {
     #[serde(flatten)]
     span_fields: serde_json::Map<String, serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    span_id: Option<u64>,
+    span_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     span_name: Option<&'a str>,
     _spans: &'a [&'a str],
@@ -321,7 +321,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             .parent()
             .cloned()
             .or_else(|| ctx.current_span().id().cloned());
-        let span_id = id.as_ref().map(Id::into_u64);
+        let span_id = id.as_ref().map(|id| format!("{:016x}", id.into_u64()));
         let span_name = id
             .as_ref()
             .and_then(|id| ctx.span(id))
@@ -356,7 +356,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                 event: SerializeEventFieldMapStrippingLog(event),
                 extra_fields: &self.extra_fields,
                 span_fields,
-                span_id,
+                span_id: span_id.as_deref(),
                 span_name,
                 _spans: &spans,
                 _span_ids: &span_ids,
