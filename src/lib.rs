@@ -78,6 +78,7 @@ use tracing_core::Event;
 use tracing_core::Level;
 use tracing_core::Subscriber;
 use tracing_log::NormalizeEvent;
+use tracing_opentelemetry::OtelData;
 use tracing_subscriber::layer::Context as TracingContext;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
@@ -249,6 +250,8 @@ struct SerializedEvent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     span_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    trace_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     span_name: Option<&'a str>,
     _spans: &'a [&'a str],
     _span_ids: &'a [u64],
@@ -321,11 +324,28 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             .parent()
             .cloned()
             .or_else(|| ctx.current_span().id().cloned());
-        let span_id = id.as_ref().map(|id| format!("{:016x}", id.into_u64()));
-        let span_name = id
+        let span = id.as_ref().and_then(|id| ctx.span(id));
+        let otel_span_id = span
             .as_ref()
-            .and_then(|id| ctx.span(id))
-            .map(|span| span.name());
+            .map(|spanref| spanref.extensions())
+            .and_then(|extension| {
+                extension
+                    .get::<OtelData>()
+                    .and_then(|otel_data| otel_data.builder.span_id)
+            })
+            .map(|id| format!("{id:016x}"));
+        let trace_id = span
+            .as_ref()
+            .map(|spanref| spanref.extensions())
+            .and_then(|extension| {
+                extension
+                    .get::<OtelData>()
+                    .and_then(|otel_data| otel_data.builder.trace_id)
+            })
+            .map(|id| format!("{id:016x}"));
+        let span_id =
+            otel_span_id.or_else(|| id.as_ref().map(|id| format!("{:016x}", id.into_u64())));
+        let span_name = span.map(|span| span.name());
         let (spans, span_ids): (Vec<_>, Vec<_>) = id
             .as_ref()
             .and_then(|id| {
@@ -357,6 +377,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                 extra_fields: &self.extra_fields,
                 span_fields,
                 span_id: span_id.as_deref(),
+                trace_id: trace_id.as_deref(),
                 span_name,
                 _spans: &spans,
                 _span_ids: &span_ids,
