@@ -1,11 +1,11 @@
-use serde::ser::SerializeMap;
 use serde::Serialize;
 use serde::Serializer;
+use serde::ser::SerializeMap;
 use std::error;
 use std::fmt;
-use tracing_core::field::Visit;
 use tracing_core::Event;
 use tracing_core::Field;
+use tracing_core::field::Visit;
 use tracing_serde::SerdeMapVisitor;
 
 pub struct SerializeEventFieldMapStrippingLog<'a>(pub &'a Event<'a>);

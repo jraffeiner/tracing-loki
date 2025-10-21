@@ -69,28 +69,28 @@ use std::time::Duration;
 use std::time::SystemTime;
 use tokio::sync::mpsc;
 use tracing::instrument::WithSubscriber;
+use tracing_core::Event;
+use tracing_core::Level;
+use tracing_core::Subscriber;
 use tracing_core::field::Field;
 use tracing_core::field::Visit;
 use tracing_core::span::Attributes;
 use tracing_core::span::Id;
 use tracing_core::span::Record;
-use tracing_core::Event;
-use tracing_core::Level;
-use tracing_core::Subscriber;
 use tracing_log::NormalizeEvent;
 use tracing_opentelemetry::OtelData;
 use tracing_subscriber::layer::Context as TracingContext;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
+use ErrorInner as ErrorI;
 use labels::FormattedLabels;
 use level_map::LevelMap;
 use log_support::SerializeEventFieldMapStrippingLog;
 use no_subscriber::NoSubscriber;
-use ErrorInner as ErrorI;
 
-pub use builder::builder;
 pub use builder::Builder;
+pub use builder::builder;
 
 mod builder;
 mod labels;
@@ -331,7 +331,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             .and_then(|extension| {
                 extension
                     .get::<OtelData>()
-                    .and_then(|otel_data| otel_data.builder.span_id)
+                    .and_then(|otel_data| otel_data.span_id())
             })
             .map(|id| format!("{id:016x}"));
         let trace_id = span
@@ -340,7 +340,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             .and_then(|extension| {
                 extension
                     .get::<OtelData>()
-                    .and_then(|otel_data| otel_data.builder.trace_id)
+                    .and_then(|otel_data| otel_data.trace_id())
             })
             .map(|id| format!("{id:016x}"));
         let span_id =

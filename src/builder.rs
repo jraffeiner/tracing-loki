@@ -1,12 +1,12 @@
-use super::event_channel;
 use super::BackgroundTask;
 use super::BackgroundTaskController;
 use super::Error;
 use super::ErrorI;
 use super::FormattedLabels;
 use super::Layer;
-use std::collections::hash_map;
+use super::event_channel;
 use std::collections::HashMap;
+use std::collections::hash_map;
 use url::Url;
 
 /// Create a [`Builder`] for constructing a [`Layer`] and its corresponding
