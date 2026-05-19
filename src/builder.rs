@@ -7,6 +7,7 @@ use super::Layer;
 use super::event_channel;
 use std::collections::HashMap;
 use std::collections::hash_map;
+use std::sync::OnceLock;
 use url::Url;
 
 /// Create a [`Builder`] for constructing a [`Layer`] and its corresponding
@@ -163,6 +164,7 @@ impl Builder {
             Layer {
                 sender,
                 extra_fields: self.extra_fields,
+                dispatch: OnceLock::new(),
             },
             BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
         ))
@@ -194,6 +196,7 @@ impl Builder {
             Layer {
                 sender: sender.clone(),
                 extra_fields: self.extra_fields,
+                dispatch: OnceLock::new(),
             },
             BackgroundTaskController { sender },
             BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,

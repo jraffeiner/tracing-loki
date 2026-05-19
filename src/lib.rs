@@ -55,6 +55,7 @@ pub extern crate url;
 
 use loki_api::logproto as loki;
 use loki_api::prost;
+use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
 use std::cmp;
 use std::collections::HashMap;
@@ -63,11 +64,13 @@ use std::fmt;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::sync::mpsc;
+use tracing::dispatcher::WeakDispatch;
 use tracing::instrument::WithSubscriber;
 use tracing_core::Event;
 use tracing_core::Level;
@@ -78,7 +81,7 @@ use tracing_core::span::Attributes;
 use tracing_core::span::Id;
 use tracing_core::span::Record;
 use tracing_log::NormalizeEvent;
-use tracing_opentelemetry::OtelData;
+use tracing_opentelemetry::get_otel_context;
 use tracing_subscriber::layer::Context as TracingContext;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
@@ -230,6 +233,7 @@ pub fn layer(
 pub struct Layer {
     extra_fields: HashMap<String, String>,
     sender: mpsc::Sender<Option<LokiEvent>>,
+    dispatch: OnceLock<WeakDispatch>,
 }
 
 struct LokiEvent {
@@ -300,6 +304,10 @@ impl Visit for Fields {
 }
 
 impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for Layer {
+    fn on_register_dispatch(&self, subscriber: &tracing::Dispatch) {
+        let _ = self.dispatch.set(subscriber.downgrade());
+    }
+
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: TracingContext<'_, S>) {
         let span = ctx.span(id).expect("Span not found, this is a bug");
         let mut extensions = span.extensions_mut();
@@ -309,12 +317,14 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             extensions.insert(fields);
         }
     }
+
     fn on_record(&self, id: &Id, values: &Record<'_>, ctx: TracingContext<'_, S>) {
         let span = ctx.span(id).expect("Span not found, this is a bug");
         let mut extensions = span.extensions_mut();
         let fields = extensions.get_mut::<Fields>().expect("unregistered span");
         values.record(fields);
     }
+
     fn on_event(&self, event: &Event<'_>, ctx: TracingContext<'_, S>) {
         let timestamp = SystemTime::now();
         let normalized_meta = event.normalized_metadata();
@@ -325,24 +335,23 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             .cloned()
             .or_else(|| ctx.current_span().id().cloned());
         let span = id.as_ref().and_then(|id| ctx.span(id));
-        let otel_span_id = span
+        let (otel_spanid, otel_trace_id) = id
             .as_ref()
-            .map(|spanref| spanref.extensions())
-            .and_then(|extension| {
-                extension
-                    .get::<OtelData>()
-                    .and_then(|otel_data| otel_data.span_id())
+            .and_then(|id| {
+                self.dispatch
+                    .get()
+                    .and_then(|weak_dispatch| weak_dispatch.upgrade())
+                    .map(|dispatch| (id, dispatch))
             })
-            .map(|id| format!("{id:016x}"));
-        let trace_id = span
-            .as_ref()
-            .map(|spanref| spanref.extensions())
-            .and_then(|extension| {
-                extension
-                    .get::<OtelData>()
-                    .and_then(|otel_data| otel_data.trace_id())
+            .and_then(|(span_id, dispatch)| get_otel_context(span_id, &dispatch))
+            .map(|otel_ctx| {
+                let span = otel_ctx.span();
+                let span_context = span.span_context();
+                (span_context.span_id(), span_context.trace_id())
             })
-            .map(|id| format!("{id:016x}"));
+            .unzip();
+        let otel_span_id = otel_spanid.map(|id| format!("{id:016x}"));
+        let trace_id = otel_trace_id.map(|id| format!("{id:016x}"));
         let span_id =
             otel_span_id.or_else(|| id.as_ref().map(|id| format!("{:016x}", id.into_u64())));
         let span_name = span.map(|span| span.name());
